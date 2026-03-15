@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.env
+venv/
+.venv/
+ 
+# Do NOT ignore data/ and models/ — these pre-generated artifacts
+# must be committed for Render to serve the app without retraining.
+# (If files exceed 100 MB, use git LFS instead of ignoring them.)
+ 
+# Local-only overrides
+*.DS_Store
+.idea/
+.vscode/
