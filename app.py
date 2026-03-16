@@ -178,6 +178,10 @@ _pct_repriced    = float((df["Adjustment_Pct"].abs() > 10).mean() * 100)
 _pct_underpriced = float(
     (df["GLM_Pure_Premium"] < df["Expected_Pure_Premium"] * (1 - UNDERPRICE_THRESH)).mean() * 100
 )
+_pct_underpriced_after = float(
+    (df["Final_Pure_Premium"] < df["Expected_Pure_Premium"] * (1 - UNDERPRICE_THRESH)).mean() * 100
+)
+_adverse_selection_reduction = _pct_underpriced - _pct_underpriced_after
 _mean_leakage = float(
     (df.loc[df["GLM_Pure_Premium"] < df["Expected_Pure_Premium"] * (1 - UNDERPRICE_THRESH),
             "Expected_Pure_Premium"] -
@@ -185,6 +189,9 @@ _mean_leakage = float(
             "GLM_Pure_Premium"]).mean()
 )
 MEAN_GLM_PP = float(df["GLM_Pure_Premium"].mean())
+_total_reclass_pct = float(
+    (df["GLM_Risk_Tier"] != df["Final_Risk_Tier"]).mean() * 100
+)
 
 print(f"  OOS R²: GLM={glm_r2:.4f}  Final={final_r2:.4f}  ΔR²={delta_r2:+.4f}")
 print(f"  Risk neutrality: weighted mean uplift = {_risk_neutral_check:.6f}")
@@ -452,58 +459,52 @@ style={"borderBottom": f"3px solid {GOLD}"})
 # TAB 1  —  BUSINESS CASE
 # ══════════════════════════════════════════════════════════════════════════════
 def build_portfolio_tab():
-    # ── Premium Flow — where the money moves ──────────────────────────────────
-    _n_surcharge   = int((df["Adjustment_Pct"] > 0).sum())
-    _n_credit      = int((df["Adjustment_Pct"] < 0).sum())
-    _avg_surcharge = _premium_up   / max(_n_surcharge, 1)
-    _avg_credit    = _premium_down / max(_n_credit,    1)
+    # ── Where Mispricing Concentrates — Net Premium Flow by State ─────────────
+    _state_flow = df.copy()
+    _state_flow["_adj_dollars"] = (
+        _state_flow["Final_Pure_Premium"] - _state_flow["GLM_Pure_Premium"])
+    _sf = _state_flow.groupby("State").agg(
+        net_flow   = ("_adj_dollars", "sum"),
+        n_policies = ("_adj_dollars", "size"),
+        avg_adj_pct= ("Adjustment_Pct", "mean"),
+    ).sort_values("net_flow")
 
     fig_flow = go.Figure()
     fig_flow.add_trace(go.Bar(
-        y=["Premium Flow"], x=[_premium_up / 1e6],
-        orientation="h", marker_color=RED, opacity=0.85,
-        text=[f"${_premium_up/1e6:.1f}M surcharges"],
-        textposition="inside", textfont=dict(size=12, color=WHITE, family="Inter"),
-        hovertemplate=(f"{_n_surcharge:,} policies · "
-                       f"avg ${_avg_surcharge:,.0f}/policy<extra></extra>"),
-        name="Surcharges (underpriced → corrected up)",
+        y=_sf.index,
+        x=_sf["net_flow"] / 1e6,
+        orientation="h",
+        marker_color=[RED if v > 0 else GREEN for v in _sf["net_flow"]],
+        text=[f"${v/1e6:+.1f}M" for v in _sf["net_flow"]],
+        textposition="outside",
+        textfont=dict(size=9, family="Inter"),
+        hovertemplate="State: %{y}<br>Net flow: $%{x:.1f}M<extra></extra>",
     ))
-    fig_flow.add_trace(go.Bar(
-        y=["Premium Flow"], x=[-_premium_down / 1e6],
-        orientation="h", marker_color=GREEN, opacity=0.85,
-        text=[f"${_premium_down/1e6:.1f}M credits"],
-        textposition="inside", textfont=dict(size=12, color=WHITE, family="Inter"),
-        hovertemplate=(f"{_n_credit:,} policies · "
-                       f"avg ${_avg_credit:,.0f}/policy<extra></extra>"),
-        name="Credits (overpriced → corrected down)",
-    ))
-    # Net = $0 center line
-    fig_flow.add_vline(x=0, line_color=NAVY, line_width=2)
+    # Zero line
+    fig_flow.add_vline(x=0, line_color=NAVY, line_width=1.5, line_dash="dot")
+
+    # Annotate the biggest surcharge contributor
+    _top_surcharge_state = _sf.index[_sf["net_flow"] == _sf["net_flow"].max()][0]
+    _top_surcharge_val   = float(_sf["net_flow"].max() / 1e6)
     fig_flow.add_annotation(
-        x=0, y=0, yshift=30,
-        text="<b>Net = $0</b><br><i>Book premium unchanged</i>",
-        showarrow=False, font=dict(size=11, color=NAVY, family="Inter"),
-        bgcolor=WHITE, bordercolor=NAVY, borderwidth=1, borderpad=4)
-    # Policy count annotations under each bar
-    fig_flow.add_annotation(
-        x=_premium_up / 1e6 / 2, y=0, yshift=-22,
-        text=f"{_n_surcharge:,} policies · avg ${_avg_surcharge:,.0f}/ea",
-        showarrow=False, font=dict(size=9, color=MUTED, family="Inter"))
-    fig_flow.add_annotation(
-        x=-_premium_down / 1e6 / 2, y=0, yshift=-22,
-        text=f"{_n_credit:,} policies · avg ${_avg_credit:,.0f}/ea",
-        showarrow=False, font=dict(size=9, color=MUTED, family="Inter"))
+        x=_top_surcharge_val, y=_top_surcharge_state,
+        text="Wildfire × Roof<br>interactions drive<br>surcharges",
+        showarrow=True, arrowhead=2, ax=50, ay=-20,
+        font=dict(size=8, color=RED, family="Inter"),
+        bgcolor=WHITE, bordercolor="rgba(230,57,70,0.3)",
+        borderwidth=1, borderpad=3)
+
     fig_flow.update_xaxes(
-        title_text="Premium Redistribution ($M)",
-        zeroline=True, zerolinecolor=NAVY, zerolinewidth=1,
+        title_text="Net Premium Redistribution ($M)",
         tickprefix="$", ticksuffix="M",
-        range=[-_premium_down/1e6 * 1.3, _premium_up/1e6 * 1.3])
-    fig_flow.update_yaxes(visible=False)
+        zeroline=True)
+    fig_flow.update_yaxes(tickfont=dict(size=10, family="Inter"))
     fig_flow.update_layout(
-        template="plotly_white", height=180,
-        barmode="relative", showlegend=False,
-        margin=dict(l=10, r=10, t=10, b=40),
-        font=dict(family="Inter"))
+        template="plotly_white", height=CHART_HEIGHT_SM,
+        showlegend=False,
+        margin=dict(l=10, r=70, t=10, b=40),
+        font=dict(family="Inter"),
+        plot_bgcolor="#FAFBFC")
 
     # ── GA2M Adjustment Distribution — what the intelligence layer actually does ──
     _pct_surcharge = float((df["Adjustment_Pct"] > 10).mean() * 100)
@@ -669,98 +670,17 @@ def build_portfolio_tab():
         margin=dict(l=10, r=70, t=20, b=40), font=dict(family="Inter"),
         plot_bgcolor="#FAFBFC")
 
-    # ── Signed Pricing Error by Risk Segment ──────────────────────────────────
-    # Signed error reveals WHERE the GLM misprices: overprices low-risk (competitors
-    # cream-skim), underprices high-risk (adverse selection). GA2M flattens to ~0.
-    _dl = _test.copy()
-    try:
-        _dl["risk_quintile"] = pd.qcut(
-            _dl["GLM_Pure_Premium"], q=5,
-            labels=["Q1\nLowest Risk", "Q2", "Q3\nMiddle", "Q4", "Q5\nHighest Risk"])
-
-        # Signed: positive = model overprices (GLM > true), negative = underprices
-        _dl["glm_signed_err"] = (
-            (_dl["GLM_Pure_Premium"] - _dl["Expected_Pure_Premium"])
-            / _dl["Expected_Pure_Premium"]) * 100
-        _dl["fin_signed_err"] = (
-            (_dl["Final_Pure_Premium"] - _dl["Expected_Pure_Premium"])
-            / _dl["Expected_Pure_Premium"]) * 100
-
-        _q_glm = _dl.groupby("risk_quintile", observed=True)["glm_signed_err"].mean()
-        _q_fin = _dl.groupby("risk_quintile", observed=True)["fin_signed_err"].mean()
-
-        fig_lift = go.Figure()
-        fig_lift.add_trace(go.Bar(
-            name="Legacy GLM",
-            x=_q_glm.index.astype(str), y=_q_glm.values,
-            marker_color=[RED if v < 0 else GREEN for v in _q_glm.values],
-            marker_opacity=0.4,
-            text=[f"{v:+.1f}%" for v in _q_glm.values],
-            textposition="outside", textfont=dict(size=10, family="Inter"),
-        ))
-        fig_lift.add_trace(go.Bar(
-            name="GLM + GA2M",
-            x=_q_fin.index.astype(str), y=_q_fin.values,
-            marker_color=NAVY, marker_opacity=0.9,
-            text=[f"{v:+.1f}%" for v in _q_fin.values],
-            textposition="outside", textfont=dict(size=10, family="Inter"),
-        ))
-        # Zero line = perfect pricing
-        fig_lift.add_hline(y=0, line_color=MUTED, line_width=1.5, line_dash="dot")
-        fig_lift.add_annotation(
-            x=0.01, y=0, xref="paper", yref="y",
-            text="← Perfect pricing", showarrow=False, yshift=10,
-            font=dict(size=8, color=MUTED, family="Inter"))
-
-        # Narrative callouts on Q1 (overpriced → cream-skim) and Q5 (underpriced → adverse sel)
-        _q1_glm = float(_q_glm.iloc[0])
-        _q5_glm = float(_q_glm.iloc[-1])
-        if _q1_glm > 2:
-            fig_lift.add_annotation(
-                x=str(_q_glm.index[0]), y=_q1_glm,
-                text=f"GLM overprices low risk<br>by {_q1_glm:.0f}%<br>"
-                     f"<i>→ competitors cream-skim</i>",
-                showarrow=True, arrowhead=2, ax=60, ay=-30,
-                font=dict(size=9, color=GREEN, family="Inter"),
-                bgcolor=WHITE, bordercolor="rgba(44,198,83,0.3)", borderwidth=1, borderpad=3)
-        if _q5_glm < -2:
-            fig_lift.add_annotation(
-                x=str(_q_glm.index[-1]), y=_q5_glm,
-                text=f"GLM underprices high risk<br>by {abs(_q5_glm):.0f}%<br>"
-                     f"<i>→ adverse selection</i>",
-                showarrow=True, arrowhead=2, ax=-60, ay=30,
-                font=dict(size=9, color=RED, family="Inter"),
-                bgcolor=WHITE, bordercolor="rgba(230,57,70,0.3)", borderwidth=1, borderpad=3)
-
-        # Y-axis range: symmetric around zero with headroom for text labels
-        _y_abs_max = max(abs(_q_glm.values).max(), abs(_q_fin.values).max())
-        fig_lift.update_xaxes(title_text="Risk Segment (by GLM Premium)")
-        fig_lift.update_yaxes(
-            title_text="Avg Signed Pricing Error (%)",
-            zeroline=True,
-            range=[-_y_abs_max * 1.55, _y_abs_max * 1.55],
-        )
-        fig_lift.update_layout(
-            barmode="group", template="plotly_white", height=CHART_HEIGHT_SM,
-            legend=dict(orientation="h", y=1.08, xanchor="right", x=1),
-            margin=dict(l=10, r=10, t=40, b=50), font=dict(family="Inter"))
-    except Exception:
-        fig_lift = go.Figure().add_annotation(
-            text="Pricing accuracy chart requires sufficient data",
-            x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
-            font=dict(size=12, color=MUTED))
-        fig_lift.update_layout(height=CHART_HEIGHT_SM, template="plotly_white")
-
     # ── Layout ────────────────────────────────────────────────────────────────
     return html.Div([
         dbc.Alert([
             html.I(className="fas fa-lightbulb me-2", style={"color": GOLD}),
             html.Strong("The Business Case: "),
             f"The legacy 16-variable GLM explains {glm_r2:.1%} of pure premium variance "
-            f"{OOS_LABEL}. This solution raises this to {final_r2:.1%} — a +{delta_r2:.4f} ΔR² "
-            f"that reprices {_pct_repriced:.1f}% of the book by >10%, reclassifies "
-            f"{(df['GLM_Risk_Tier'] != df['Final_Risk_Tier']).mean()*100:.0f}% of policies across risk tiers, "
-            f"and corrects adverse selection on {_pct_underpriced:.1f}% of policies — "
+            f"{OOS_LABEL}. This solution raises this to {final_r2:.1%} — redistributing "
+            f"${(_premium_up + _premium_down)/1e6:.0f}M across the book while repricing "
+            f"{_pct_repriced:.1f}% of policies by >10%, reclassifying "
+            f"{_total_reclass_pct:.0f}% of policies across risk tiers, "
+            f"and correcting adverse selection on {_pct_underpriced:.1f}% of policies — "
             f"with zero change to total book premium.",
         ], color="warning", className="mb-4",
            style={"borderLeft": f"4px solid {GOLD}", "backgroundColor": "#FFFBF0",
@@ -768,37 +688,43 @@ def build_portfolio_tab():
 
         # KPI row — 5 cards: dollars first, statistics supporting
         dbc.Row([
-            dbc.Col(kpi_card("fas fa-dollar-sign", "ANNUAL PREMIUM AT RISK",
-                f"${_premium_up/1e6:.1f}M",
-                "Underpriced policies requiring surcharge correction",
-                RED, "LEAKAGE"), width=2),
-            dbc.Col(kpi_card("fas fa-seedling", "OVERPRICED — GROWTH OPPORTUNITY",
-                f"${_premium_down/1e6:.1f}M",
-                "Policies competitors will cream-skim at current GLM rates",
-                GREEN, "GROWTH"), width=2),
+            dbc.Col(kpi_card("fas fa-exchange-alt", "PREMIUM REDISTRIBUTION",
+                f"${(_premium_up + _premium_down)/1e6:.0f}M",
+                f"${_premium_up/1e6:.1f}M surcharges + ${_premium_down/1e6:.1f}M credits = $0 net. "
+                f"Pure redistribution, not a rate increase.",
+                GOLD, "NEUTRAL"), width=3),
+            dbc.Col(kpi_card("fas fa-arrows-alt-v", "PORTFOLIO RECLASSIFIED",
+                f"{_total_reclass_pct:.0f}%",
+                f"{int(N_TOTAL * _total_reclass_pct / 100):,} policies crossing tier boundaries "
+                f"after intelligence adjustment",
+                NAVY, "MOVEMENT"), width=2),
             dbc.Col(kpi_card("fas fa-arrow-trend-up", "Variance Lift ΔR²",
                 f"+{delta_r2:.3f}",
                 f"GLM {glm_r2:.0%} → {final_r2:.0%} · "
                 f"{delta_r2/(1-glm_r2):.0%} of residual recovered",
                 GREEN, "KEY LIFT"), width=2),
-            dbc.Col(kpi_card("fas fa-exclamation-triangle", "Adverse Selection",
-                f"{_pct_underpriced:.1f}%",
-                f"Policies GLM underprices >{int(UNDERPRICE_THRESH*100)}% · "
-                f"avg leakage ${_mean_leakage:,.0f}/policy", RED, "RISK"), width=3),
+            dbc.Col(kpi_card("fas fa-exclamation-triangle", "ADVERSE SELECTION",
+                f"{_pct_underpriced:.0f}% → {_pct_underpriced_after:.0f}%",
+                f"Policies underpriced >{int(UNDERPRICE_THRESH*100)}%: "
+                f"reduced by {_adverse_selection_reduction:.0f}pp · "
+                f"avg leakage ${_mean_leakage:,.0f}/policy",
+                RED, "CORRECTED"), width=2),
             dbc.Col(kpi_card("fas fa-balance-scale", "Book Premium Impact",
                 f"{_book_delta_pct:+.2f}%",
                 f"Total: ${_total_final/1e6:,.1f}M — redistributed, not inflated. "
                 f"E_w[uplift] = {_risk_neutral_check:.4f}×", TEAL, "NEUTRAL"), width=3),
         ], className="g-3 mb-4"),
 
-        # Row 1: Where the money moves + per-policy adjustment distribution
+        # Row 1: Where mispricing concentrates + per-policy adjustment distribution
         dbc.Row([
-            dbc.Col(chart_card("Where the Money Moves — Premium Redistribution", "tt-r2",
-                f"The intelligence layer identifies ${_premium_up/1e6:.1f}M of underpriced risk "
-                f"(surcharges needed) and ${_premium_down/1e6:.1f}M of overpriced risk "
-                f"(credits deserved). Net = $0 — pure redistribution, not a rate increase.",
+            dbc.Col(chart_card("Where Mispricing Concentrates — Net Flow by State", "tt-flow",
+                "Net premium redistribution per state after intelligence adjustment. "
+                "Red = state receives net surcharges (GLM systematically underprices risks there, "
+                "typically from compound-peril interactions like wildfire × roof). "
+                "Green = state receives net credits (GLM overprices, creating competitive exposure). "
+                "All flows sum to $0.",
                 dcc.Graph(figure=fig_flow, config={"displayModeBar": False}),
-                subtitle="Red = surcharges on underpriced risks · Green = credits on overpriced risks · Net = $0"), width=4),
+                subtitle="Red = net surcharges flowing in · Green = net credits flowing out · Sum = $0"), width=4),
             dbc.Col(chart_card("Intelligence Adjustment Distribution", "tt-dist",
                 "How much does the GA2M layer move each policy? The spread from "
                 "−35% to +60% shows meaningful per-policy repricing while the "
@@ -807,19 +733,7 @@ def build_portfolio_tab():
                 subtitle="Each bar = policies receiving that % adjustment · centered at 0% = risk neutral"), width=8),
         ], className="g-3 mb-4"),
 
-        # Row 2: Systematic mispricing — the proof chart (full width)
-        dbc.Row([
-            dbc.Col(chart_card("Systematic Mispricing by Risk Segment", "tt-lift",
-                "Signed pricing error reveals WHERE the GLM misprices: it systematically "
-                "overprices low-risk policies (Q1, green — competitors cream-skim these) and "
-                "underprices high-risk policies (Q5, red — adverse selection accumulates here). "
-                "The GA2M (navy bars) corrects both directions toward zero.",
-                dcc.Graph(figure=fig_lift, config={"displayModeBar": False}),
-                subtitle=f"Positive = GLM overprices (growth opportunity) · Negative = GLM underprices (adverse selection) · {OOS_LABEL}"),
-            width=12),
-        ], className="g-3 mb-4"),
-
-        # Row 3: Adverse selection (5) + Reclassification scatter (3) + Matrix (4, wider+taller)
+        # Row 2: Adverse selection (5) + Reclassification scatter (3) + Matrix (4, wider+taller)
         dbc.Row([
             dbc.Col(chart_card("Adverse Selection Map — GLM Underpricing",
                 "tt-adverse",
@@ -900,10 +814,19 @@ def _build_shape_panel() -> dbc.Row:
                         float(df[feat].quantile(0.98))]
             fig_chars.add_trace(go.Scatter(
                 x=_x_range, y=[0, 0], mode="lines",
-                line=dict(color=MUTED, width=1.5, dash="dash"),
+                line=dict(color=AMBER, width=2.5, dash="dash"),
                 name="GLM linear", showlegend=False,
                 hoverinfo="skip",
             ), row=r, col=c)
+            # Inline label — unmissable, amber = GLM world
+            fig_chars.add_annotation(
+                xref=xref, yref=yref,
+                x=_x_range[1], y=0,
+                text="GLM assumption (0%)",
+                showarrow=False,
+                xanchor="right", yanchor="bottom", yshift=4,
+                font=dict(size=7, color=AMBER, family="Inter"),
+            )
 
         # ── Layer 3: EBM shape function ───────────────────────────────────────
         _sd = SHAPE_CACHE.get(feat)
