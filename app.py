@@ -1615,7 +1615,7 @@ def build_framework_tab():
                         formula_block("log E[Sevᵢ]  = γ₀ + γ₁x₁ᵢ + γ₂x₂ᵢ + … + γₖxₖᵢ",
                             "Gamma GLM · 4 engineered interactions: Frame×HighPC, "
                             "Claims×LowDed, Urban×HighPC, OldRoof×Hail"),
-                        formula_block("GLM PPᵢ = exp(β₀+γ₀) · ∏ₖ exp((βₖ+γₖ)·xₖᵢ)",
+                        formula_block("GLM PPᵢ = exp(β₀+γ₀)· (AOIᵢ/100K) · ∏ₖ exp((βₖ+γₖ)·xₖᵢ)",
                             "Multiplicative relativities — ISO/Bureau tariff structure"),
                         html.Div([html.Strong("Credit score suppression: "),
                                   "CA and MA policies use portfolio median (700) to simulate "
