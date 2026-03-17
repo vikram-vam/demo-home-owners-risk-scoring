@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # ==============================================================================
 # setup.py
-# Pipeline orchestrator for ResiScore™ GLM + GA2M Residual Demo
+# Pipeline orchestrator for GLM + GA2M Residual Demo
 #
 # Usage:
 #   python setup.py                  # full regeneration
@@ -162,7 +162,7 @@ def print_summary(data_stats: dict, glm_metrics: dict, ebm_metrics: dict,
     from config import (FINAL_DATA_PATH, FREQ_MODEL_PATH, SEV_MODEL_PATH,
                         EBM_MODEL_PATH, METADATA_PATH)
 
-    banner("PIPELINE COMPLETE — RESISCORE™ DEMO READY")
+    banner("PIPELINE COMPLETE — DEMO READY")
 
     print("\n  DATA")
     print(f"    Policies generated : {data_stats.get('n_policies', '?'):,}")
@@ -205,7 +205,7 @@ def print_summary(data_stats: dict, glm_metrics: dict, ebm_metrics: dict,
 def parse_args():
     parser = argparse.ArgumentParser(
         description=(
-            "ResiScore™ setup — generates synthetic data and trains the "
+            "Demo setup — generates synthetic data and trains the "
             "GLM + GA2M pipeline.\n\n"
             "Run this once before launching app.py.\n"
             "Expected runtime: 3–8 minutes (100K policies, EBM outer_bags=8)."
@@ -242,7 +242,7 @@ def main():
     args = parse_args()
     total_start = time.time()
 
-    banner("RESISCORE™ GLM + GA2M PIPELINE SETUP")
+    banner("GLM + GA2M PIPELINE SETUP")
     print("  Two-layer homeowners risk scoring: GLM baseline + GA2M residual")
     print("  Target audience: Carrier VP Analytics, Chief Actuary, Head of Pricing")
 

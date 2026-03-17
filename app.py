@@ -229,24 +229,74 @@ def _get_ebm_shape(feature_name: str) -> dict | None:
 def _get_ebm_interaction(feat_a: str, feat_b: str) -> dict | None:
     """
     Find and return the EBM interaction surface for (feat_a, feat_b).
-    Searches term_names_ for the matching pair; falls back to None.
+    Three-method cascade:
+      A: string delimiter match on term_names_
+      B: integer/string tuple match on term_names_
+      C: structural — iterate all terms, check for 2D names in
+         explain_global data, then verify feature identity via
+         term_features_ or term name parsing
+    Falls back to None if no match found.
     """
+    target = {feat_a, feat_b}
     try:
-        target = {feat_a, feat_b}
         for i, term in enumerate(ebm_model.term_names_):
-            if isinstance(term, str) and " x " in term:
-                parts = {t.strip() for t in term.split(" x ")}
-                if parts == target:
+            term_str = str(term)
+            matched  = False
+
+            # Method A: string delimiter
+            for delim in (" x ", " & ", " × "):
+                if delim in term_str:
+                    parts = {t.strip() for t in term_str.split(delim)}
+                    if parts == target:
+                        matched = True
+                    break
+
+            # Method B: tuple of integer indices or string names
+            if not matched and isinstance(term, (list, tuple)) and len(term) == 2:
+                t0, t1 = term[0], term[1]
+                if isinstance(t0, (int, np.integer)) and isinstance(t1, (int, np.integer)):
+                    a_name = EBM_ALL_FEATURES[t0] if t0 < len(EBM_ALL_FEATURES) else ""
+                    b_name = EBM_ALL_FEATURES[t1] if t1 < len(EBM_ALL_FEATURES) else ""
+                    if {a_name, b_name} == target:
+                        matched = True
+                elif isinstance(t0, str) and isinstance(t1, str):
+                    if {t0, t1} == target:
+                        matched = True
+
+            # Method C: structural — check explain_global data for 2D surface,
+            # then verify feature identity via term_features_
+            if not matched:
+                try:
                     d = global_exp.data(i)
-                    if d and "scores" in d:
-                        return d
-            elif isinstance(term, (list, tuple)) and len(term) == 2:
-                a_name = (EBM_ALL_FEATURES[term[0]] if term[0] < len(EBM_ALL_FEATURES) else "")
-                b_name = (EBM_ALL_FEATURES[term[1]] if term[1] < len(EBM_ALL_FEATURES) else "")
-                if {a_name, b_name} == target:
-                    d = global_exp.data(i)
-                    if d and "scores" in d:
-                        return d
+                    if d and "names" in d and "scores" in d:
+                        _tn = d["names"]
+                        if (isinstance(_tn, (list, tuple)) and len(_tn) == 2
+                                and hasattr(_tn[0], "__len__")
+                                and hasattr(_tn[1], "__len__")
+                                and not isinstance(_tn[0], str)
+                                and not isinstance(_tn[1], str)):
+                            # It's an interaction surface — identify features
+                            pair_names = set()
+                            if hasattr(ebm_model, "term_features_") and i < len(ebm_model.term_features_):
+                                tf = ebm_model.term_features_[i]
+                                if isinstance(tf, (list, tuple)) and len(tf) == 2:
+                                    for idx in tf:
+                                        if isinstance(idx, (int, np.integer)) and idx < len(EBM_ALL_FEATURES):
+                                            pair_names.add(EBM_ALL_FEATURES[idx])
+                            if not pair_names:
+                                for dl in (" x ", " & ", " × "):
+                                    if dl in term_str:
+                                        pair_names = {p.strip() for p in term_str.split(dl)}
+                                        break
+                            if pair_names == target:
+                                matched = True
+                except Exception:
+                    pass
+
+            if matched:
+                d = global_exp.data(i)
+                if d and "scores" in d:
+                    return d
     except Exception:
         pass
     return None
@@ -939,7 +989,9 @@ def build_feature_tab():
                     _tnames = _term_data["names"]
                     if (isinstance(_tnames, (list, tuple)) and len(_tnames) == 2
                             and hasattr(_tnames[0], "__len__")
-                            and hasattr(_tnames[1], "__len__")):
+                            and hasattr(_tnames[1], "__len__")
+                            and not isinstance(_tnames[0], str)
+                            and not isinstance(_tnames[1], str)):
                         _interaction_names.add(_gname)
             except Exception:
                 continue
@@ -954,11 +1006,17 @@ def build_feature_tab():
                 _interaction_names.add(_gn)
 
     def _bar_color(name):
+        # Primary: structural detection from explain_global data
         if name in _interaction_names:
-            return GOLD        # interaction term
+            return GOLD
+        # Fallback: string delimiter detection (EBM uses " x " in term_names_)
+        if any(d in str(name) for d in (" x ", " & ", " × ")):
+            return GOLD
+        # Modern enrichment signal (not in legacy GLM feature set)
         if name not in _ebm_base_set:
-            return NAVY        # new modern signal
-        return "#5B6F8A"       # legacy feature gaining non-linear treatment
+            return NAVY
+        # Legacy feature gaining non-linear treatment
+        return "#5B6F8A"
 
     _bar_colors = [_bar_color(n) for n, _ in _sorted]
     fig_imp = go.Figure(go.Bar(
@@ -1012,6 +1070,163 @@ def build_feature_tab():
         font=dict(family="Inter"),
         plot_bgcolor="#FAFBFC",
     )
+
+    # ── Interaction Discovery Panel ───────────────────────────────────────────
+    # Extract all interaction terms from the EBM using dual detection
+    _interaction_terms = []
+    for i, term in enumerate(ebm_model.term_names_):
+        term_str = str(term)
+        is_interaction = False
+        # Method 1: string delimiter
+        if any(d in term_str for d in (" x ", " & ", " × ")):
+            is_interaction = True
+        # Method 2: structural — interaction terms have names as a tuple/list
+        # of TWO arrays (one per feature axis), each containing multiple bin
+        # edges. Binary categoricals also have len(names)==2 but each element
+        # is a single string, not an array of numeric bin edges.
+        if not is_interaction:
+            try:
+                _td = global_exp.data(i)
+                if _td and "names" in _td:
+                    _tn = _td["names"]
+                    if (isinstance(_tn, (list, tuple)) and len(_tn) == 2
+                            and hasattr(_tn[0], "__len__")
+                            and hasattr(_tn[1], "__len__")
+                            and not isinstance(_tn[0], str)
+                            and not isinstance(_tn[1], str)):
+                        is_interaction = True
+            except Exception:
+                pass
+        if is_interaction:
+            score = 0.0
+            if i < len(global_scores):
+                score = abs(global_scores[i])
+            else:
+                try:
+                    _td = global_exp.data(i)
+                    if _td and "scores" in _td:
+                        score = float(np.abs(np.array(_td["scores"])).mean())
+                except Exception:
+                    pass
+            _interaction_terms.append({
+                "term":         term_str.replace("_", " "),
+                "raw_term":     term_str,
+                "importance":   score,
+                "dollar_impact": score * MEAN_GLM_PP,
+                "index":        i,
+            })
+    _interaction_terms.sort(key=lambda x: x["importance"], reverse=True)
+
+    # ── Interaction ranking bar chart ────────────────────────────────────────
+    if _interaction_terms:
+        _int_sorted = _interaction_terms[::-1]
+        fig_int_rank = go.Figure(go.Bar(
+            y=[t["term"] for t in _int_sorted],
+            x=[t["dollar_impact"] for t in _int_sorted],
+            orientation="h",
+            marker_color=GOLD, marker_opacity=0.85,
+            text=[f"~${t['dollar_impact']:,.0f}/policy" for t in _int_sorted],
+            textposition="outside",
+            textfont=dict(size=9, color=NAVY, family="Inter"),
+            hovertemplate="Interaction: %{y}<br>Avg impact: $%{x:,.0f}/policy<extra></extra>",
+        ))
+        _total_int_imp = sum(t["dollar_impact"] for t in _interaction_terms)
+        _total_all_imp = sum(abs(s) * MEAN_GLM_PP for s in global_scores) or 1
+        _int_pct = _total_int_imp / _total_all_imp * 100
+        fig_int_rank.add_annotation(
+            x=0.98, y=0.02, xref="paper", yref="paper",
+            text=(f"<b>{len(_interaction_terms)}</b> interaction terms discovered<br>"
+                  f"<b>{_int_pct:.0f}%</b> of total GA2M signal"),
+            showarrow=False, xanchor="right", yanchor="bottom",
+            font=dict(size=10, color=NAVY, family="Inter"),
+            bgcolor=WHITE, bordercolor=GOLD, borderwidth=1, borderpad=5)
+        fig_int_rank.add_annotation(
+            x=0.98, y=0.15, xref="paper", yref="paper",
+            text="Dollar magnitude ≠ interaction purity<br>"
+                 "See H-statistic chart for validation →",
+            showarrow=False, xanchor="right", yanchor="bottom",
+            font=dict(size=8, color=MUTED, family="Inter"),
+            bgcolor=WHITE, bordercolor=BORDER, borderwidth=1, borderpad=3)
+        fig_int_rank.update_xaxes(title_text="Average Dollar Impact per Policy ($)",
+                                   tickprefix="$")
+        fig_int_rank.update_yaxes(tickfont=dict(size=9, family="Inter"))
+        fig_int_rank.update_layout(
+            template="plotly_white",
+            height=max(250, len(_interaction_terms) * 35 + 80),
+            margin=dict(l=10, r=80, t=10, b=40),
+            font=dict(family="Inter"), plot_bgcolor="#FAFBFC")
+    else:
+        fig_int_rank = go.Figure().add_annotation(
+            text="No interaction terms detected in the EBM model",
+            x=0.5, y=0.5, xref="paper", yref="paper", showarrow=False,
+            font=dict(size=12, color=MUTED))
+        fig_int_rank.update_layout(height=200, template="plotly_white")
+
+    # ── Friedman H-statistic validation ──────────────────────────────────────
+    _h_stats = []
+    for _it in _interaction_terms[:8]:
+        try:
+            _idata = global_exp.data(_it["index"])
+            if _idata and "scores" in _idata:
+                _int_scores = np.array(_idata["scores"], dtype=float)
+                _var_int = float(np.var(_int_scores))
+                _raw = _it["raw_term"]
+                _parts = None
+                for _delim in (" x ", " & ", " × "):
+                    if _delim in _raw:
+                        _parts = [p.strip() for p in _raw.split(_delim)]
+                        break
+                if _parts and len(_parts) == 2:
+                    _var_a, _var_b = 0.0, 0.0
+                    for _fi, _fn in enumerate(ebm_model.term_names_):
+                        _fd = None
+                        try:
+                            _fd = global_exp.data(_fi)
+                        except Exception:
+                            pass
+                        if _fd and "scores" in _fd:
+                            _s = np.array(_fd["scores"], dtype=float)
+                            if str(_fn) == _parts[0]:
+                                _var_a = float(np.var(_s))
+                            elif str(_fn) == _parts[1]:
+                                _var_b = float(np.var(_s))
+                    _total_var = _var_a + _var_b + _var_int
+                    _h = _var_int / _total_var if _total_var > 0 else 0.0
+                    _h_stats.append({
+                        "pair": _it["term"],
+                        "H": _h,
+                        "dollar_impact": _it["dollar_impact"],
+                    })
+        except Exception:
+            continue
+
+    if _h_stats:
+        _h_stats.sort(key=lambda x: x["H"], reverse=True)
+        fig_h = go.Figure(go.Bar(
+            y=[h["pair"] for h in _h_stats[::-1]],
+            x=[h["H"]    for h in _h_stats[::-1]],
+            orientation="h",
+            marker_color=[RED if h["H"] > 0.15 else AMBER if h["H"] > 0.05 else MUTED
+                          for h in _h_stats[::-1]],
+            text=[f"H={h['H']:.3f}" for h in _h_stats[::-1]],
+            textposition="outside",
+            textfont=dict(size=9, family="Inter"),
+            hovertemplate="Pair: %{y}<br>Friedman H: %{x:.3f}<extra></extra>",
+        ))
+        fig_h.add_vline(x=0.05, line_color=AMBER, line_width=1.5, line_dash="dot",
+                        annotation_text="H=0.05 threshold",
+                        annotation_position="top right",
+                        annotation_font_size=10)
+        fig_h.update_xaxes(title_text="Friedman H-Statistic (interaction strength)",
+                           range=[0, max(h["H"] for h in _h_stats) * 1.3])
+        fig_h.update_yaxes(tickfont=dict(size=9, family="Inter"))
+        fig_h.update_layout(
+            template="plotly_white",
+            height=max(250, len(_h_stats) * 35 + 80),
+            margin=dict(l=10, r=60, t=10, b=40),
+            font=dict(family="Inter"), plot_bgcolor="#FAFBFC")
+    else:
+        fig_h = None
 
     # ── Interaction surface — native EBM (fallback: binned heatmap) ───────────
     if INTERACTION_SURFACE is not None:
@@ -1108,6 +1323,40 @@ def build_feature_tab():
                 dcc.Loading(dcc.Graph(figure=fig_state, config={"displayModeBar": False}),
                             type="circle"),
                 subtitle="Red = avg surcharge · Green = avg credit · bars = ±1 SE"),
+            width=6),
+        ], className="g-3 mb-4"),
+
+        # Interaction Discovery + H-statistic validation
+        dbc.Row([
+            dbc.Col(chart_card(
+                "Interaction Discovery — Pairwise Effects Ranked by Dollar Impact",
+                "tt-int-rank",
+                "The GA2M automatically discovers pairwise feature interactions that produce "
+                "compound risk effects beyond the sum of individual features. Gold bars show "
+                "the estimated average dollar impact per policy for each discovered interaction "
+                "pair. These are the effects the GLM's additive structure cannot capture.",
+                dcc.Loading(dcc.Graph(figure=fig_int_rank, config={"displayModeBar": False}),
+                            type="circle"),
+                subtitle=(f"{len(_interaction_terms)} pairwise interactions discovered · "
+                           f"Gold = compound-peril effect the GLM misses")),
+            width=6),
+            dbc.Col(chart_card(
+                "Interaction Strength — Friedman H-Statistic Validation",
+                "tt-h-stat",
+                "The Friedman H-statistic measures what fraction of a feature pair's joint "
+                "effect comes from their interaction vs. the sum of individual effects. "
+                "H > 0.05 = meaningful interaction. H > 0.15 = strong. "
+                "Rankings differ from the dollar-impact chart because H measures interaction "
+                "purity (how much of the joint signal IS interaction), while dollar impact "
+                "measures absolute pricing magnitude. A high-H / low-dollar pair means "
+                "the interaction dominates its features' joint effect but the features "
+                "themselves have a smaller residual. Both views are complementary.",
+                dcc.Loading(dcc.Graph(figure=fig_h, config={"displayModeBar": False}),
+                            type="circle")
+                if fig_h else html.Div("H-statistics require interaction terms",
+                                       style={"color": MUTED, "padding": "20px"}),
+                subtitle="H measures interaction purity (not dollar size) · "
+                         "H > 0.05 = meaningful · H > 0.15 = strong"),
             width=6),
         ], className="g-3 mb-4"),
 
@@ -1782,7 +2031,9 @@ def update_policy_view(selected_idx, view_type):
             def _classify(n):
                 if n in ["GA2M Intercept", "All Other Signals", "Net Residual Adj"]:
                     return "meta"
-                return "interaction" if " & " in n else "main"
+                # EBM uses " x " as the interaction delimiter in term_names_
+                # Also check " & " and " × " for backward compatibility
+                return "interaction" if any(d in n for d in (" x ", " & ", " × ", " X ")) else "main"
 
             raw_names   = (["GA2M Intercept"] + [f[0] for f in top_f] +
                            ["All Other Signals", "Net Residual Adj"])

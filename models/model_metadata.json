@@ -1,5 +1,5 @@
 {
-  "training_date": "2026-03-15T17:40:03",
+  "training_date": "2026-03-17T12:10:05",
   "data_path": "data/synthetic_homeowners_data.csv",
   "n_total": 100000,
   "n_train": 80000,
@@ -44,16 +44,16 @@
     "cat__Frame_HighPC_1",
     "cat__FreqClaims_LowDed_1"
   ],
-  "glm_r2_train": 0.6668,
-  "glm_r2_test": 0.6635,
-  "glm_rmse_train": 885.52,
-  "glm_rmse_test": 889.78,
-  "glm_freq_aic": 33739.3,
-  "glm_freq_deviance_explained": 2.22,
-  "glm_sev_aic": 102010.4,
-  "glm_sev_deviance_explained": 0.33,
+  "glm_r2_train": 0.6442,
+  "glm_r2_test": 0.6402,
+  "glm_rmse_train": 994.0,
+  "glm_rmse_test": 991.54,
+  "glm_freq_aic": 33363.1,
+  "glm_freq_deviance_explained": 2.56,
+  "glm_sev_aic": 100912.9,
+  "glm_sev_deviance_explained": 0.43,
   "premium_floor": 300,
-  "ebm_training_date": "2026-03-15T17:41:21",
+  "ebm_training_date": "2026-03-17T12:11:11",
   "ebm_features": [
     "Year_Built",
     "Square_Footage",
@@ -88,8 +88,33 @@
   "n_interactions_total": 15,
   "n_interactions_forced": 6,
   "n_interactions_auto": 9,
-  "interaction_mode": "auto",
-  "interactions_discovered": [],
+  "interaction_mode": "explicit_tuples",
+  "interactions_discovered": [
+    [
+      "Wildfire_Exposure_Daily",
+      "Roof_Vulnerability_Satellite"
+    ],
+    [
+      "Hail_Frequency",
+      "Roof_Vulnerability_Satellite"
+    ],
+    [
+      "Slope_Steepness",
+      "Wildfire_Exposure_Daily"
+    ],
+    [
+      "Water_Loss_Recency_Months",
+      "Tree_Canopy_Density"
+    ],
+    [
+      "RCV_Overstatement",
+      "Crime_Severity_Index"
+    ],
+    [
+      "Pluvial_Flood_Depth",
+      "Dwelling_Age"
+    ]
+  ],
   "log_corridor": [
     -0.4308,
     0.47
@@ -99,15 +124,15 @@
     1.6
   ],
   "risk_neutrality_check": 1.0,
-  "raw_weighted_mean_uplift": 0.945483,
-  "final_r2_test": 0.8028,
-  "delta_r2": 0.1393,
-  "final_rmse_test": 681.1,
-  "total_glm_premium": 211058715.0,
-  "total_final_premium": 211058715.0,
-  "premium_up_dollars": 16023476.0,
-  "premium_down_dollars": 16021286.0,
-  "pct_policies_surcharge": 41.59,
-  "pct_policies_credit": 58.38,
-  "tier_reclassifications": 21511
+  "raw_weighted_mean_uplift": 0.953206,
+  "final_r2_test": 0.7958,
+  "delta_r2": 0.1556,
+  "final_rmse_test": 746.92,
+  "total_glm_premium": 211765577.0,
+  "total_final_premium": 211765577.0,
+  "premium_up_dollars": 17909116.0,
+  "premium_down_dollars": 17907577.0,
+  "pct_policies_surcharge": 42.71,
+  "pct_policies_credit": 57.25,
+  "tier_reclassifications": 23229
 }
